@@ -7,13 +7,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-@Transactional
 @RequiredArgsConstructor
 public class StockService {
 
     private final StockRepository stockRepository;
 
-    public void decreaseStock(Long id, Long quantity) {
+    // @Transactional
+    public synchronized void decreaseStock(Long id, Long quantity) {
         // Stock을 조회
         // 재고 감소
         // 갱신된 값을 저장
