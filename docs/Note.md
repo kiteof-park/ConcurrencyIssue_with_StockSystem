@@ -141,7 +141,7 @@ class StockServiceTest {
 - 하나의 Thread가 작업이 완료된 이후에, 다른 스레드가 데이터에 접근할 수 있도록 해야 함
 - 구체적으로 어떻게 ?
 ---
-### ✨ 해결 방법1. *- Java synchronized*
+## ✨ 해결 방법1. *- Java synchronized*
 - `synchronized` 키워드를 메서드 선언부에 붙여, 해당 메서드는 하나의 스레드만 접근 가능하도록 함
 ```java
     @Transactional
@@ -153,14 +153,16 @@ class StockServiceTest {
         stockRepository.saveAndFlush(stock);
     }
 ```
-### ✨ 해결 방법1. 테스트 결과 
+### ✨ 해결 방법1. 테스트 결과 - 실패
 ❌테스트 실패 .. ! ! ! !❌
 
 ![img.png](img.png)
 
-## 테스트 실패 원인
+### 테스트 실패 원인
 - `synchronized` 키워드를 사용해 문제를 해결하려고 했으나, 테스트에 실패했다.
 - 실패 원인은 `@Transactional`의 동작 방식
+
+## 테스트 실패 해결 방법1. @Transactional 제거
 
 ### @Transactional의 동작 방식
 - `@Transactional`을 사용하면 Spring이 해당 메서드를 감싼 **프록시(proxy) 객체**를 생성해 트랜잭션을 관리
@@ -170,7 +172,7 @@ class StockServiceTest {
   - 즉, `decreaseStock()`이 실행되어도 실제 DB에는 변경 사항이 반영되지 않은 상태 
   - `decreaseStock()`이 완료되고 실제 DB에 업데이트 되기 전에 다른 스레드가 `decreaseStock()`을 호출
   - 다른 스레드는 갱신되기 전에 값을 가져가서 이전과 동일한 문제가 발생
-- `@Transactional`을 제거하고 테스트하면 테스트 성공
+- 💡 `@Transactional`을 제거하고 테스트하면 테스트 성공
 
 ### synchronized의 동작 방식
 - `synchronized` 키워드는 같은 인스턴스에서 실행되는 여러 스레드가  
@@ -212,9 +214,7 @@ class StockServiceTest {
 `@Transactonal`이 적용되면서 프록시 객체가 실행되므로  
 동일한 객체가 아닐 가능성이 있어 `synchronized`가 깨질 수 있음
 
----
-
-## synchronized 사용의 문제점
+### synchronized 사용의 문제점
 - `synchronized`는 하나의 프로세스 안에서만 보장
 - 서버가 1대일 떄는 데이터 접근을 서버 1대만 해서 괜찮겠지만,  
 서버가 2대 혹은 그 이상인 경우 데이터 접근을 여러 대에서 할 수 있게 됨
@@ -228,3 +228,142 @@ class StockServiceTest {
 |       |                                                         | {id: 1, quantity: 5} | SELECT *<br/>FROM stock<br/>WHERE id = 1 |
 | 10:05 | UPDATE SET quantity = 4<br/>FROM stock<br/>WHERE id = 1 | {id: 1, quantity: 4} |                                          |
 |       |                                                         | {id: 1, quantity: 4} | UPDATE SET quantity = 4<br/>FROM stock<br/>WHERE id = 1                                         |
+
+-- 
+## ✨ 해결 방법2. *- MySql의 Lock 활용*
+### 🔒 1. Pessimistic Lock(비관적 락)
+- 트랜잭션이 데이터에 접근할 때, 다른 트랜잭션이 동시에 접근하지 못하도록 **선점적으로 락을 거는 방식**
+- 실제 데이터에 직접적으로 락을 거는 방식
+- 다른 트랜잭션은 락이 해제되기 전까지 데이터를 읽을 수 없음
+#### 특징
+- 데이터 충돌을 피하기 위해 **먼저 락을 걸고 작업을 진행**
+- 일반적으로 `Exclusive Lock(X Lock, 배타적 락)`을 사용해 다른 트랜잭션의 Read/Write을 방지
+- **충돌이 빈번한 환경에서 유용(은행 계좌이체, 재고 관리)**
+- 락을 통해 업데이트를 제어하므로 데이터 정합성이 보장
+#### 단점
+- 락이 오래 유지될 경우 동시성 저하(성능 저하)
+- 데드락 발생 가능성 존재
+#### 사용 예시
+- `FOR UPDATE`는 해당 행에 `X LOCK`을 걸어 다른 트랜잭션의 R/W을 할 수 없도록 함
+```sql
+BEGIN;
+SELECT * FROM orders WHERE id = 1 FOR UPDATE;
+-- ♻️ 락이 걸린 상태에서 처리
+UPDATE orders SET status = 'CONFIRMED' WHERE id = 1;
+COMMIT;
+```
+
+### 🔒 2. Optimistic Lock(낙관적 락)
+- 데이터를 읽고 수정할 때까지 락을 걸지 않고, **수정 시점에서 충돌 여부를 확인**
+- 실제로 락을 이용하지 않고 버전을 이용해 데이터 정합성을 맞춤
+#### 특징
+- 트랜잭션이 데이터를 읽고 수정할 때, 다른 트랜잭션이 변경하지 않았는지 확인 후 업데이트
+- 읽은 버전에 수정사항이 생겼을 경우 application에서 다시 읽은 후 작업 수행
+- 일반적으로 `버전번호`  또는 `타임스탬프`를 활용해 변경 여부를 확인
+- 동시성이 높은 환경에서 유용하며, 충돌 가능성이 낮은 경우 적합
+#### 단점
+- 충돌이 발생하면 다시 데이터를 읽고 재시도해야 함
+#### 사용 예시(Java + JPA)
+- 데이터 변경 시 `version`값이 증가하며, 업데이트 시 기존 버전과 비교해 충돌 감지
+
+```java
+@Entity
+public class Order{
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    // 🔒 낙관적 락 적용(JPA)
+    @Version    
+    private Integer version;
+    
+    private String status;
+}
+```
+```java
+Order order = orderRepository.findById(1L).orElseThrow();
+order.setStatus("CONFIRMED");
+
+// ⚠️ 만약 버전이 다르면 Optimistic Lock 예외 발생
+orderRepository.save(order); 
+```
+
+### 🔒 3. Named Lock(네임드 락)
+- 데이터베이스에서 **특정한 이름을 가진 락을 획득**해 동시성 제어
+- 이름을 가진 메타데이터 락킹
+- `Pessimistic Lock`은 row, table 단위지만 `Named Lock`은 메타데이터를 락킹
+#### 특징
+- **트랜잭션과 별개**로 락을 걸 수 있음(특정 리소스를 보호할 때 사용)
+- 주로 MySQL의 `GET_LOCK()`을 이용
+- 락을 걸 때 **테이블의 특정 행이 아니라, 특정한 명칭(리소스 단위)에 락을 거는 방식**
+#### 단점
+- 락을 획득하지 못하면 대기하거나 재시도 로직 필요
+- 트랜잭션 종료 시 락 자동 해제❌, 락을 걸고 해제하는 별도 로직이 필요
+#### 사용 예시(MySQL)
+```sql
+-- 🔒 락 획득(5초 동안 대기하여 획득)
+SELECT GET_LOCK('order_lock', 5);
+
+-- ♻️ 처리 로직
+UPDATE orders SET status = 'CONFIRMED' WHERE id = 1;
+
+-- 🔓 락 해제
+SELECT RELEASE_LOCK('order_lock');
+```
+---
+## 해결 방법 2-1.*- Pessimistic Lock 활용*
+- `Pessimistic Lock`(`Exclusive Lock`)을 걸게 되면,  
+다른 트랜잭션에서 락이 해제되기 전에 락을 걸고 데이터를 가져갈 수 없음❌
+
+<img src ="C:\Users\user\Desktop\pessimistic.jpg">
+
+📂 `StockRepository.java`
+```java
+public interface StockRepository extends JpaRepository<Stock, Long> {
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("SELECT s FROM Stock s WHERE s.id = :id")
+  Stock findByIdWithPessimisticLock(Long id);
+}
+```
+📂 `PessimisticLockStockService.java`
+```java
+@Service
+@Transactional
+@RequiredArgsConstructor
+public class PessimisticLockStockService {
+
+    private final StockRepository stockRepository;
+
+    public void decreaseStock(Long id, Long quantity) {
+        Stock stock = stockRepository.findByIdWithPessimisticLock(id);
+        stock.decreaseQuantity(quantity);
+        stockRepository.save(stock);
+    }
+}
+```
+###  Pessimistic Lock 테스트 결과
+- 테스트 성공 !! 
+```sql
+select s1_0.id,s1_0.product_id,s1_0.quantity 
+from stock s1_0 
+where s1_0.id=? for update
+```
+### ✏️ @Lock
+- JPA에서는 `@Lock(LockModeType.PESSIMISTIC_WRITE)`을 사용해 비관적 락을 설정할 수 있음
+- `findByIdWithPessimisticLock()`을 실행하면 `for update`가 적용된 쿼리가 실행
+- 트랜잭션이 커밋될 때 락이 해제됨
+
+### ✏️ for update
+- `for update`는 비관적 락(Pessimistic Lock)을 구현할 때 사용되는 SQL 구문
+- `for update`를 사용하면 **조회한 행(row)이 잠기고,**  
+다른 트랜잭션이 이를 수정하거나 삭제하려고 하면 대기상태가 됨
+---
+
+
+
+
+## 해결 방법 2-2.*- Optimistic Lock 활용*
+
+
+## 해결 방법 2-3.*- Named Lock 활용*
