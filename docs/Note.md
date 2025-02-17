@@ -315,7 +315,7 @@ SELECT RELEASE_LOCK('order_lock');
 - `Pessimistic Lock`(`Exclusive Lock`)을 걸게 되면,  
 다른 트랜잭션에서 락이 해제되기 전에 락을 걸고 데이터를 가져갈 수 없음❌
 
-<img src ="C:\Users\user\Desktop\pessimistic.jpg">
+![img_3.png](img_3.png)
 
 📂 `StockRepository.java`
 ```java
@@ -360,10 +360,110 @@ where s1_0.id=? for update
 다른 트랜잭션이 이를 수정하거나 삭제하려고 하면 대기상태가 됨
 ---
 
-
-
-
 ## 해결 방법 2-2.*- Optimistic Lock 활용*
+- Optimistic Lock은 실제로 락을 이용하지 않고 버전(`Version`)을 이용해
+데이터 정합성을 맞추는 방법
 
+![img_2.png](img_2.png)
+
+📂 `Stock.java`
+- `verison` 컬럼 추가
+- `@Version`은 `javax.persistence`패키지에 있는 어노테이션 사용
+```java
+@Entity
+@Getter
+@NoArgsConstructor
+public class Stock {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long productId;
+
+    private Long quantity;
+
+    @Version
+    private Long version;
+
+    public Stock(Long productId, Long quantity) {
+        this.productId = productId;
+        this.quantity = quantity;
+    }
+
+    // 재고 수량 감소 메서드
+    public void decreaseQuantity(Long quantity) {
+        if (this.quantity - quantity < 0) {
+            throw new RuntimeException("재고는 0개 미만이 될 수 없습니다.");
+        }
+        this.quantity -= quantity;
+    }
+}
+```
+
+📂 `StockRepository.java`
+```java
+public interface StockRepository extends JpaRepository<Stock, Long> {
+    
+    @Lock(LockModeType.OPTIMISTIC)
+    @Query("SELECT s FROM Stock s WHERE s.id = :id")
+    Stock findByIdWithOptimisticLock(Long id);
+}
+```
+📂 `OptimisticLockStockService.java`
+```java
+@Service
+@Transactional
+@RequiredArgsConstructor
+public class OptimisticLockStockService {
+
+    private final StockRepository stockRepository;
+
+    public void decreaseStock(Long id, Long quantity) {
+        Stock stock = stockRepository.findByIdWithOptimisticLock(id);
+        stock.decreaseQuantity(quantity);
+        stockRepository.save(stock);
+    }
+}
+```
+📂 `facade/OptimisticLockStockFacade.java`
+- Optimistic Lock은 실패했을 때 재시도를 해야 하므로 해당 클래스를 작성
+```java
+@Component
+@RequiredArgsConstructor
+public class OptimisticLockStockFacade {
+
+    private final OptimisticLockStockService optimisticLockStockService;
+
+    public void decreaseStock(Long id, Long quantity) throws InterruptedException {
+        while(true){
+            try{
+                optimisticLockStockService.decreaseStock(id, quantity);
+                break;
+            } catch (Exception e) {
+                // 📍 업데이트 실패 시, 50ms 후에 재시도 
+                Thread.sleep(50);
+            }
+        }
+    }
+}
+```
+### Optimistic Lock 테스트 결과
+- 테스트 성공 !!
+- `Optimistic Lock`은 별도의 락을 잡지 않으므로,  
+  `Pessimistic Lock`보다 성능상 이점이 있음
+- 단, **update가 실패했을 때 재시도 로직을 개발자가 직접 작성**해줘야 하는 번거로움 발생
+
+### ✏️ @Version
+- `@Version`은 JPA에서 Optimistic Lock을 구현하는데 사용되는 어노테이션
+  - 여러 트랜잭션이 동일한 엔티티를 수정할 때 발생할 수 있는 충돌 방지
+  - 데이터를 수정하기 전에 다른 트랜잭션에 의해 변경되지 않았음을 검증
+- `@Version`은 **자동으로 버전 번호를 관리하여, 엔티티가 변경할 때마다 값이 증가**
+- 이를 통해 동시에 같은 데이터를 수정하는 경우, 충돌을 감지하고 예외를 발생시킴
+
+### ✏️ facade 패키지와 faced 클래스
+- 블로그에 적어야겠다 ...
 
 ## 해결 방법 2-3.*- Named Lock 활용*
+
+
