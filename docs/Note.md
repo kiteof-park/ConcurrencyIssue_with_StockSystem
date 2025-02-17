@@ -290,7 +290,7 @@ orderRepository.save(order);
 
 ### 🔒 3. Named Lock(네임드 락)
 - 데이터베이스에서 **특정한 이름을 가진 락을 획득**해 동시성 제어
-- 이름을 가진 메타데이터 락킹
+- 이름을 가진 메타데이터 락
 - `Pessimistic Lock`은 row, table 단위지만 `Named Lock`은 메타데이터를 락킹
 #### 특징
 - **트랜잭션과 별개**로 락을 걸 수 있음(특정 리소스를 보호할 때 사용)
@@ -461,9 +461,55 @@ public class OptimisticLockStockFacade {
 - `@Version`은 **자동으로 버전 번호를 관리하여, 엔티티가 변경할 때마다 값이 증가**
 - 이를 통해 동시에 같은 데이터를 수정하는 경우, 충돌을 감지하고 예외를 발생시킴
 
-### ✏️ facade 패키지와 faced 클래스
+### ✏️ facade 패키지와 facade 클래스
 - 블로그에 적어야겠다 ...
 
 ## 해결 방법 2-3.*- Named Lock 활용*
+- `NamedLock`은 이름을 가진 메타데이터 락
+- 이름을 가진 락을 획득한 후 해제할 때까지 다른 세션은 이 락을 획득❌
+- 트랜잭션이 종료될 때 자동 해제❌, 별도 명령어로 해제하거나 선점 시간이 끝나야 해제
+- MySQL은 `GET_LOCK`, `RELEASE_LOCK` 명령어 사용
 
+![img_4.png](img_4.png)
 
+📂 `LockRepository.java`
+```java
+public interface LockRepository extends JpaRepository<Stock, Long> {
+    @Query(value = "select get_lock(:key, 3000)", nativeQuery = true)
+    void getLock(String key);
+
+    @Query(value = "select release_lock(:key)", nativeQuery = true)
+    void releaseLock(String key);
+}
+```
+📂 `NamedLockStockFacade.java`
+- 실제 로직 전후로 락 획득과 해제를 해줘야하므로 Facade 클래스 추가
+```java
+@Component
+@RequiredArgsConstructor
+public class NamedLockStockFacade {
+
+    private final LockRepository lockRepository;
+
+    private final StockService stockService;
+
+    @Transactional
+    public void decreaseStock(Long id, Long quantity) {
+        try{
+            // 락 획득
+            lockRepository.getLock(id.toString());
+
+            // 재고 감소
+            stockService.decreaseStock(id, quantity);
+        } finally {
+            // 락 해제
+            lockRepository.releaseLock(id.toString());
+        }
+    }
+}
+```
+### Named Lock 테스트 결과
+- 테스트 성공 ! ! !
+- `NamedLock`은 주로 **분산락**을 구현할 때 사용
+- PessimisticLock과 달리 NamedLock은 타임아웃을 손쉽게 구현 가능
+- 트랜잭션 종료 시 락 해제, 세션 관리를 잘 해줘야 함
