@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
 class OptimisticLockStockFacadeTest {
+
     @Autowired
     private OptimisticLockStockFacade optimisticLockStockFacade;
 
@@ -66,8 +67,6 @@ class OptimisticLockStockFacadeTest {
 
         Stock stock = stockRepository.findById(1L).orElseThrow();
 
-        // Expected:0,  Actual:96 왜 그럴까? -> 💥 Race Condition 발생
-        //  둘 이상의 Thread가 공유 데이터에 액세스 할 수 있고, 동시에 변경을하려고 할 때 발생하는 문제
         assertEquals(0, stock.getQuantity());
     }
 
